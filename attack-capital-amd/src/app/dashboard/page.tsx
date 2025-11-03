@@ -78,6 +78,8 @@ export default function HomePage() {
         endpoint = "/api/dial/jambonz";
       } else if (strategy === "huggingface") {
         endpoint = "/api/dial/huggingface";
+      } else if (strategy === "gemini") {
+        endpoint = "/api/dial/gemini";
       }
       // Add other strategies as they become available
 
@@ -445,9 +447,7 @@ export default function HomePage() {
                   <option value="twilio-native">Twilio Native AMD</option>
                   <option value="jambonz">Jambonz SIP AMD</option>
                   <option value="huggingface">HuggingFace ML</option>
-                  <option value="gemini" disabled>
-                    Gemini 2.5 Flash (Coming Soon)
-                  </option>
+                  <option value="gemini">Gemini 2.5 Flash (Coming Soon)</option>
                 </select>
                 <p className="text-xs text-gray-500 mt-2">
                   {getStrategyDescription(strategy)}
