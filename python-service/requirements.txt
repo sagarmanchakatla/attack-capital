@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+google-generativeai
+pydantic
+python-multipart
+python-dotenv
+aiofiles
+numpy
+pydub
+librosa
+soundfile
+websockets
+transformers
+torch
+torchaudio
+accelerate
+scipy
