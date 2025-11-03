@@ -12,19 +12,19 @@ export async function POST(request: Request) {
 
     const response = new VoiceResponse();
 
-    // Greeting optimized for Gemini analysis
+    // Greeting that encourages natural speech for better transcript analysis
     response.say(
       {
         voice: "alice",
         language: "en-US",
       },
-      "Thank you for answering. We're using advanced AI to verify this call. Please speak naturally for a few seconds."
+      "Thank you for answering. Please speak naturally - this call is being analyzed for verification purposes."
     );
 
-    // 10-second pause to capture good audio sample for Gemini
-    response.pause({ length: 10 });
+    // 8-second pause to capture speech
+    response.pause({ length: 8 });
 
-    response.say("Analysis complete. Thank you for your time.");
+    response.say("Thank you. Analysis complete.");
     response.hangup();
 
     console.log(`🎯 Generated Gemini voice TwiML for ${callSid}`);

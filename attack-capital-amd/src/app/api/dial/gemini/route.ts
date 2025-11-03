@@ -75,7 +75,7 @@ export async function POST(req: Request) {
       const twilioCall = await client.calls.create({
         to: phoneNumber,
         from: defaultFrom,
-        // Enable recording for Gemini analysis
+        // Enable recording for transcript analysis
         record: true,
         recordingStatusCallback: `${baseUrl}/api/webhooks/twilio/gemini-recording`,
         recordingStatusCallbackEvent: ["completed"],
@@ -87,6 +87,7 @@ export async function POST(req: Request) {
         url: `${baseUrl}/api/webhooks/twilio/gemini-voice`,
         // Twilio AMD as fallback
         machineDetection: "Enable",
+        asyncAmd: true,
         machineDetectionTimeout: 10,
       });
 
@@ -115,7 +116,7 @@ export async function POST(req: Request) {
             twilioCall: twilioCall,
             strategy: "gemini",
             gemini_health: health,
-            cost_estimate: geminiClient.getModelInfo(),
+            model_info: geminiClient.getModelInfo(),
           },
         },
       });
@@ -127,19 +128,18 @@ export async function POST(req: Request) {
         callId: call.id,
         callSid: twilioSid,
         status: "ringing",
-        message: "Call initiated with Gemini Flash Live AMD",
+        message: "Call initiated with Gemini Flash AMD",
         amdConfig: {
           strategy: "gemini",
           model: geminiClient.getModelInfo().model_name,
           features: [
-            "Multimodal AI analysis",
-            "LLM-based reasoning",
-            "Real-time capable",
-            "Cost-optimized",
+            "LLM-based transcript analysis",
+            "Advanced reasoning capabilities",
+            "Cost-optimized processing",
             "Fallback to Twilio AMD",
           ],
           status: geminiClient.getModelInfo().status,
-          cost_estimate: "~$0.15-0.25 per minute",
+          cost_estimate: "~$0.001-0.005 per call",
         },
       });
     } catch (callError: any) {

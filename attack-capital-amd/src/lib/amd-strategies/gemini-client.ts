@@ -1,48 +1,56 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 interface GeminiPrediction {
   label: "human" | "machine";
   confidence: number;
   reasoning: string;
   processing_time: number;
   cost_estimate: number;
+  tokens_used: number;
+  audio_duration?: number;
+  detectionPattern?: string;
+  audioQuality?: string;
+  callEnvironment?: string;
+}
+
+interface GeminiHealth {
+  status: "healthy" | "unhealthy";
+  model_available: boolean;
+  api_key_configured: boolean;
+  model_name: string;
 }
 
 class GeminiClient {
-  private apiKey: string;
-  private baseUrl: string;
-  private modelName: string;
+  private genAI: GoogleGenerativeAI | null = null;
+  private modelName: string = "gemini-2.5-flash"; // Use 1.5-flash as 2.5 might not be available yet
 
   constructor() {
-    this.apiKey = process.env.GEMINI_API_KEY || "";
-    this.baseUrl = "https://generativelanguage.googleapis.com/v1beta";
-    this.modelName = "gemini-1.5-flash"; // Using available model
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (apiKey) {
+      this.genAI = new GoogleGenerativeAI(apiKey);
+    }
   }
 
-  async healthCheck(): Promise<{
-    status: "healthy" | "unhealthy";
-    model_available: boolean;
-    api_key_configured: boolean;
-  }> {
-    if (!this.apiKey) {
+  async healthCheck(): Promise<GeminiHealth> {
+    if (!this.genAI) {
       return {
         status: "unhealthy",
         model_available: false,
         api_key_configured: false,
+        model_name: this.modelName,
       };
     }
 
     try {
-      const response = await fetch(
-        `${this.baseUrl}/models/${this.modelName}?key=${this.apiKey}`,
-        {
-          method: "GET",
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      const model = this.genAI.getGenerativeModel({ model: this.modelName });
+      // Use a simpler test that's more likely to work
+      const result = await model.generateContent("Say 'OK' if working");
 
       return {
-        status: response.ok ? "healthy" : "unhealthy",
-        model_available: response.ok,
+        status: "healthy",
+        model_available: true,
         api_key_configured: true,
+        model_name: this.modelName,
       };
     } catch (error) {
       console.error("Gemini health check failed:", error);
@@ -50,105 +58,188 @@ class GeminiClient {
         status: "unhealthy",
         model_available: false,
         api_key_configured: true,
+        model_name: this.modelName,
       };
     }
   }
 
-  async analyzeAudio(
-    audioBuffer: Buffer,
+  async analyzeTranscript(
+    transcript: string,
     audioDuration: number
   ): Promise<GeminiPrediction> {
     const startTime = Date.now();
 
-    if (!this.apiKey) {
-      throw new Error("Gemini API key not configured");
+    if (!this.genAI) {
+      throw new Error("Gemini API not configured");
     }
 
     try {
-      // For now, simulate Gemini analysis since direct audio analysis requires specific setup
-      const result = await this.simulateGeminiAnalysis(
-        audioBuffer,
-        audioDuration
-      );
+      const model = this.genAI.getGenerativeModel({
+        model: this.modelName,
+        generationConfig: {
+          temperature: 0.1,
+          maxOutputTokens: 150,
+        },
+      });
 
+      const isNoisyAudio = transcript.length < 10; // Simple noise detection
+      const optimizedTranscript =
+        transcript.length > 500
+          ? transcript.substring(0, 500) + "..."
+          : transcript;
+
+      const prompt = isNoisyAudio
+        ? this.getFallbackPrompt(optimizedTranscript)
+        : this.getStandardPrompt(optimizedTranscript, audioDuration);
+
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      const text = response.text();
+
+      const parsed = this.parseGeminiResponse(text);
       const processingTime = Date.now() - startTime;
 
+      // Get token count safely
+      let tokensUsed = 100;
+      try {
+        // @ts-ignore - usageMetadata might not be in types yet
+        tokensUsed = response.usageMetadata?.totalTokenCount || 100;
+      } catch (e) {
+        console.log("Could not get token count, using default");
+      }
+
       return {
-        ...result,
+        ...parsed,
         processing_time: processingTime,
-        cost_estimate: this.calculateCostEstimate(
-          audioDuration,
-          processingTime
-        ),
+        cost_estimate: this.calculateCostEstimate(tokensUsed),
+        tokens_used: tokensUsed,
+        audio_duration: audioDuration,
+        detectionPattern: "gemini_analysis",
+        audioQuality: isNoisyAudio ? "low" : "good",
+        callEnvironment: "telephony",
       };
     } catch (error) {
-      console.error("Gemini audio analysis error:", error);
+      console.error("Gemini transcript analysis error:", error);
       throw error;
     }
   }
 
-  private async simulateGeminiAnalysis(
-    audioBuffer: Buffer,
-    audioDuration: number
-  ): Promise<Omit<GeminiPrediction, "processing_time" | "cost_estimate">> {
-    // Simulate API latency
-    await new Promise((resolve) =>
-      setTimeout(resolve, 800 + Math.random() * 400)
-    );
+  private getStandardPrompt(transcript: string, audioDuration: number): string {
+    return `
+AMD DETECTION ANALYSIS - TELEPHONY AUDIO
 
-    // Simulate realistic analysis based on audio characteristics
-    const bufferSize = audioBuffer.length;
+CALL TRANSCRIPT:
+"${transcript}"
 
-    let label: "human" | "machine" = "human";
-    let confidence = 0.85;
-    let reasoning = "";
+AUDIO METADATA:
+- Duration: ${audioDuration.toFixed(1)} seconds
+- Source: Outbound telephone call
 
-    if (audioDuration < 2.0) {
-      label = "machine";
-      confidence = 0.88;
-      reasoning =
-        "Very short duration typical of automated voicemail greetings";
-    } else if (audioDuration > 8.0) {
-      label = "human";
-      confidence = 0.92;
-      reasoning = "Extended conversation patterns indicate human interaction";
-    } else {
-      // More nuanced analysis simulation
-      const hasVariation = bufferSize > 100000;
-      const optimalDuration = audioDuration > 3 && audioDuration < 15;
+ANALYSIS TASK:
+Determine if this audio contains a HUMAN or MACHINE/VOICEMAIL.
 
-      if (hasVariation && optimalDuration) {
-        label = "human";
-        confidence = 0.87;
-        reasoning = "Natural speech rhythms and variance detected";
-      } else {
-        label = "machine";
-        confidence = 0.78;
-        reasoning = "Audio patterns suggest synthesized or recorded message";
-      }
-    }
+CRITICAL: Respond with ONLY valid JSON in this exact format:
+{
+  "label": "human" or "machine",
+  "confidence": 0.95,
+  "reasoning": "brief technical explanation"
+}
 
-    // Add some randomness to simulate real ML uncertainty
-    confidence = Math.min(0.95, confidence + (Math.random() * 0.1 - 0.05));
+ANALYSIS GUIDELINES:
+HUMAN INDICATORS:
+- Natural conversation flow
+- Spontaneous responses
+- Conversational fillers ("um", "ah")
+- Background noise variations
+- Interactive dialogue patterns
 
-    return { label, confidence, reasoning };
+MACHINE INDICATORS:
+- Scripted/robotic speech
+- Repetitive greetings
+- Beep tones
+- Consistent pacing/tone
+- Standardized messages
+
+Be accurate and conservative in confidence scoring.
+Focus on speech patterns and content, not just transcript length.
+    `;
   }
 
-  private calculateCostEstimate(
-    audioDuration: number,
-    processingTime: number
-  ): number {
-    const costPerMinute = 0.15;
-    const baseProcessingCost = 0.002;
+  private getFallbackPrompt(transcript: string): string {
+    return `
+AMD Analysis - Noisy/Low-quality Audio
+Transcript: "${transcript}"
+Human or Machine? JSON: {"label":"human|machine","confidence":0.0-1.0,"reasoning":"brief"}
+    `;
+  }
 
-    return (audioDuration / 60) * costPerMinute + baseProcessingCost;
+  private parseGeminiResponse(
+    text: string
+  ): Omit<
+    GeminiPrediction,
+    "processing_time" | "cost_estimate" | "tokens_used"
+  > {
+    try {
+      // Clean the text first
+      const cleanText = text.trim();
+      const jsonMatch = cleanText.match(/\{[\s\S]*\}/);
+
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+
+        if (parsed.label && ["human", "machine"].includes(parsed.label)) {
+          return {
+            label: parsed.label,
+            confidence: Math.max(0.1, Math.min(1.0, parsed.confidence || 0.5)),
+            reasoning: parsed.reasoning || "Analysis completed",
+          };
+        }
+      }
+
+      // Fallback text parsing
+      const lowerText = cleanText.toLowerCase();
+      if (lowerText.includes("human") && !lowerText.includes("machine")) {
+        return {
+          label: "human",
+          confidence: 0.7,
+          reasoning: "Text analysis indicated human characteristics",
+        };
+      } else if (
+        lowerText.includes("machine") ||
+        lowerText.includes("voicemail") ||
+        lowerText.includes("answering")
+      ) {
+        return {
+          label: "machine",
+          confidence: 0.7,
+          reasoning: "Text analysis indicated machine characteristics",
+        };
+      }
+
+      throw new Error("Could not parse response");
+    } catch (error) {
+      console.error("Failed to parse Gemini response:", error);
+      console.error("Raw response was:", text);
+      return {
+        label: "human",
+        confidence: 0.5,
+        reasoning: "Fallback analysis due to parsing error",
+      };
+    }
+  }
+
+  private calculateCostEstimate(tokens: number): number {
+    // Gemini 1.5 Flash pricing
+    const inputCost = (tokens * 0.75) / 1000000;
+    const outputCost = (50 * 3.0) / 1000000;
+    return inputCost + outputCost;
   }
 
   getModelInfo() {
     return {
       model_name: this.modelName,
-      features: ["multimodal_analysis", "llm_reasoning", "real_time_capable"],
-      status: "simulated", // Will be 'live' when audio API is available
+      features: ["llm_reasoning", "transcript_analysis", "cost_optimized"],
+      status: "live",
     };
   }
 }
