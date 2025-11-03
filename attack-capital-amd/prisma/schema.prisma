@@ -1,0 +1,124 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  name          String?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  // Relations
+  calls         Call[]
+  sessions      Session[]
+  accounts      Account[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  accountId         String
+  providerId        String
+  accessToken       String?
+  refreshToken      String?
+  idToken           String?
+  expiresAt         DateTime?
+  password          String?
+  
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@unique([providerId, accountId])
+}
+
+model Call {
+  id              String    @id @default(cuid())
+  userId          String
+  phoneNumber     String
+  amdStrategy     String    // 'twilio-native' | 'jambonz' | 'huggingface' | 'gemini'
+  
+  // AMD Results
+  detectionResult String?   // 'human' | 'machine' | 'undecided' | 'failed'
+  confidence      Float?
+  latency         Int?      // milliseconds
+  amdStatus       String?   // Twilio's AnsweredBy field
+  
+  // Twilio metadata
+  twilioSid       String?    
+  status          String    @default("initiated") // 'initiated' | 'ringing' | 'in-progress' | 'completed' | 'failed' | 'busy' | 'no-answer'
+  duration        Int?      // seconds
+  callPrice       String?   // Cost of the call
+  // recordingUrl    String?   // ADD THIS FIELD - Twilio recording URL
+
+  jambonzCallSid String?  // Add this field
+
+  
+  // Timestamps
+  startedAt       DateTime  @default(now())
+  answeredAt      DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events          CallEvent[]
+
+  // Add these for better analysis
+  detectionPattern String?   // 'fast_human', 'slow_machine', etc.
+  audioQuality    String?   // 'clear', 'noisy', 'faint'
+  callEnvironment String?   // 'quiet', 'noisy', 'outdoor'
+  
+  @@index([userId])
+  @@index([amdStrategy])
+  @@index([detectionResult])
+  @@index([createdAt])
+  @@index([detectionPattern])
+  @@index([confidence])
+}
+
+model CallEvent {
+  id        String   @id @default(cuid())
+  callId    String
+  eventType String   // 'initiated' | 'ringing' | 'answered' | 'amd_started' | 'amd_completed' | 'completed' | 'failed' | 'busy' | 'no-answer'
+  data      Json?    // Additional event data
+  
+  call      Call     @relation(fields: [callId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  
+  @@index([callId])
+  @@index([createdAt])
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  
+  @@unique([identifier, value])
+}
