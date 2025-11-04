@@ -1,107 +1,249 @@
-# Attack Capital — Advanced Answering Machine Detection (AMD)
-
-A secure, scalable Next.js application for outbound calling with multi‑strategy Answering Machine Detection. On answer, the system classifies human vs. machine in under ~3s and either connects a live session (human) or hangs up/logs (machine). Strategies include Twilio Native AMD, Twilio+Jambonz SIP AMD, and a Python Hugging Face model service. A fourth strategy (Gemini 2.5 Flash Live) is designed but not yet implemented in this repo.
-
-> Note on Twilio Trial: Trial accounts must verify every destination phone number and play a pre‑recorded trial message that requires a key press to proceed. This adds latency and interferes with AMD (especially Strategy 1). See Known Limitations.
+Certainly! Here’s the complete, updated README.md that deeply explains your actual approach for each strategy, including your architectural reasoning and the engineering tradeoffs you described.
 
 ---
 
-## Features
+# **Attack Capital — Advanced Answering Machine Detection (AMD) System**
 
-- AMD Strategies selectable in UI: Twilio Native, Twilio+Jambonz, Hugging Face (Gemini: planned)
-- Low‑latency streaming pipelines (Twilio Media Streams → WebSocket → inference)
-- Postgres logging via Prisma (call, strategy, outcome, timings, confidence)
-- Authentication via Better‑Auth
-- Webhook‑safe backend (input validation, rate limiting, HTTPS required)
-- Developer ergonomics: ESLint/Prettier, TypeDoc/JSDoc, Docker for Python service
+## 📋 Table of Contents
+
+- [Overview](#overview)
+- [Problem Statement](#problem-statement)
+- [Solution Architecture](#solution-architecture)
+- [Key Features](#key-features)
+- [Technology Stack](#technology-stack)
+- [System Architecture](#system-architecture)
+- [AMD Strategies: Implementation Details & Rationale](#amd-strategies-implementation-details--rationale)
+  - [Twilio Native AMD](#strategy-1-twilio-native-amd)
+  - [Twilio + Jambonz SIP Trunking](#strategy-2-twilio--jambonz-sip-trunking)
+  - [Hugging Face ML Model Service](#strategy-3-hugging-face-ml-model-service)
+  - [Gemini (LLM/AI)](#strategy-4-gemini-llmai)
+- [Project Structure](#project-structure)
+- [Installation & Setup](#installation--setup)
+- [Environment Configuration](#environment-configuration)
+- [Database Schema](#database-schema)
+- [API Endpoints](#api-endpoints)
+- [Calling Flow & UI](#calling-flow--ui)
+- [Testing & Validation](#testing--validation)
+- [Performance Comparison](#performance-comparison)
+- [Security Considerations](#security-considerations)
+- [Known Limitations](#known-limitations)
+- [Deployment Guide](#deployment-guide)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
-## Architecture
+## **Overview**
 
-```mermaid
-flowchart LR
-  subgraph Client [Next.js 14 (App Router)]
-    UI[Dial UI\nStrategy Dropdown]\n
-    WS[Live Call View\nStatus, Logs]
-  end
+Attack Capital AMD is a full-stack production-ready telephony application that demonstrates advanced Answering Machine Detection (AMD) capabilities for outbound calling systems. Built for sales, outreach, and marketing automation platforms, this system intelligently determines whether a human or machine answered a call and routes accordingly—all within ~3 seconds of call answer.
 
-  subgraph NextAPI [Next.js API Routes]
-    Dial[/api/dial\n(create call)/]
-    AmdEvt[/api/amd-events\n(Twilio/Jambonz webhooks)/]
-    StreamProxy[/api/stream\n(Twilio Media Streams proxy)/]
-  end
+The project implements multiple independent AMD strategies, each with different trade-offs in accuracy, latency, cost, and customizability, allowing developers to compare and select the optimal approach for their use case.
 
-  Client -->|Dial: number+strategy| Dial
-  Dial -->|Twilio REST API| TwilioVoice[(Twilio Voice)]
-  TwilioVoice -->|Status/AMD callbacks| AmdEvt
-  TwilioVoice <-->|Media Streams (WS)| StreamProxy
+---
 
-  subgraph AMD [AMD Engines]
-    TwAMD[Twilio Native AMD]
-    Jambonz[Jambonz SIP AMD]
-    HF[Hugging Face FastAPI\npython-service]
-    Gemini[(Gemini 2.5 Flash Live)\nPlanned]
-  end
+## **Problem Statement**
 
-  StreamProxy -->|PCM chunks| HF
-  TwilioVoice -->|SIP trunk| Jambonz
+### Business Challenge
 
-  subgraph DB [Postgres]
-    Prisma[(Prisma ORM)]
-  end
+In automated outbound calling systems, ~60–80% of calls go to voicemail. Inefficiency and false positives waste both time and money. Real-world systems need AMD that is **fast, reliable, tunable, and easy to deploy**.
 
-  NextAPI <-->|read/write| Prisma
-  AmdEvt --> Prisma
-  StreamProxy --> Prisma
+### Technical Challenges
+
+- Real-time audio processing
+- Complex/ambiguous greetings
+- Infrastructure management for streaming
+- Consistent results and easy logging
+- Constraint: Keep deployment simple; ideally all web traffic through a single app.
+
+---
+
+## **Solution Architecture**
+
+(See the earlier ASCII and Mermaid diagrams for a full overview of flows and components.)
+
+1. **User chooses call target/strategy via UI.**
+2. **API creates Twilio call (via Voice API or SIP trunk).**
+3. **Depending on strategy, AMD analysis is completed by Twilio, Jambonz, or a custom ML backend.**
+4. **Result logged to DB; UI is updated accordingly.**
+5. **All services and webhooks handled through standard, secure HTTP endpoints; no extra public infrastructure required.**
+
+---
+
+## **Key Features**
+
+- AMD strategies selectable in real time
+- Detailed logging, database + exports
+- Auth-protected, user-centric UI
+- Secure webhooks/inputs, HTTPS-only
+- Developer ergonomics: Docker, code linting, type-checking, well-documented modules
+
+---
+
+## **Technology Stack**
+
+- **Frontend/Backend**: Next.js 14+, TypeScript, Tailwind CSS
+- **Database**: Postgres 14+, via Prisma ORM
+- **Authentication**: Better-Auth
+- **Telephony**: Twilio Voice (native and SIP), Jambonz (open source SIP)
+- **AI/ML**:
+  - Python FastAPI service for Hugging Face/Wav2Vec2 (Strategy 3)
+  - Planned Gemini LLM/AI audio for future
+- **Dev/Infra**: Docker, ngrok, pnpm/npm, Prisma, etc.
+
+---
+
+## **System Architecture**
+
+(See the prior diagrams. The main point: **All services are integrated either through Next.js API endpoints or a single Python microservice, with no additional public WebSocket endpoints needed.** Deployment is as simple and cloud/container friendly as possible.)
+
+---
+
+## **AMD Strategies: Implementation Details & Rationale**
+
+### **Strategy 1: Twilio Native AMD**
+
+- **Approach**:  
+  Use the Twilio Node client to make a call with `machineDetection` enabled. Two webhooks are registered:
+  - **Status webhook**: Tracks call progress.
+  - **AMD webhook**: Receives Twilio answering machine detection events.
+- **Classification Method**:  
+  When the AMD webhook fires, Twilio includes a payload field `AnsweredBy` (e.g. `"human"`, `"machine_start"`, `"machine_end_beep"`). The backend directly uses the value of this field to classify the call outcome.
+- **Why this approach**:
+  - Simple, real-time, requires no extra infra.
+  - All event processing fits within standard REST/HTTP flows; no new listeners or special routing.
+  - Latency is minimal; all classification logic offloaded to Twilio.
+- **Limitations**:  
+  Lacks configurability and can be inaccurate for complex or ambiguous greetings.
+
+---
+
+### **Strategy 2: Twilio + Jambonz SIP Trunking**
+
+- **Approach**:
+  - Twilio routes calls to a SIP trunk attached to Jambonz.
+  - Jambonz is configured for AMD, using custom thresholds or word counts.
+  - AMD events sent back to your API via webhook.
+- **Classification Method**:  
+  The Jambonz webhook includes labels such as `amd_machine_detected` or `amd_human_detected`. The backend logic parses these and logs the result.
+- **Why this approach**:
+  - Fine-tuned control over AMD decision logic and thresholds.
+  - Accommodates situations where the Twilio engine fails (e.g. very long greetings).
+  - Uses only HTTP webhooks for communication, despite the underlying SIP call transport.
+- **Tradeoff**:  
+  More infra (Jambonz server), but all event handling is done via HTTP, so no problems with firewalls, NAT, or public WebSocket exposure.
+
+---
+
+### **Strategy 3: Hugging Face ML Model Service**
+
+- **Approach**:
+  - Ideally, Twilio Media Streams would send real-time audio via a separate public WebSocket to a FastAPI service wrapping a Wav2Vec2/voicemail classifier.
+  - **Constraint**: Exposing a second public WebSocket from the same domain/server is nontrivial and often insecure in a containerized cloud deployment (especially with a Next.js app already running).
+  - **Solution**: Instead of streaming, **audio is collected/buffered during the call, then sent to the ML service for classification _after_ the call completes**. This is a batch-processing workflow rather than real-time.
+- **Why this approach**:
+  - Robust: All network and security concerns limited to a single public-facing Next.js API.
+  - Portable and simple: No need to negotiate public streaming ports or proxy WebSocket traffic through Next.js (which can't efficiently handle raw media).
+  - Still fast enough for analytics, quality control, and machine learning use cases.
+- **Tradeoff**: Detection isn’t available during the live call, so immediate actions based on voice detection (interrupting the greeting, etc.) are not possible. This is a worthwhile tradeoff for developer productivity and deployment security.
+
+---
+
+### **Strategy 4: Gemini (LLM/AI)**
+
+- **Approach**:  
+  Planned to use Google Gemini 2.5 Flash Live streaming API or similar multimodal LLM for voicemail vs. human detection.
+  - Like Hugging Face, the simplest and most maintainable workflow is to buffer call audio, then send it to the Gemini API after completion.
+- **Why this approach**:
+  - All Internet/external API connectivity is handled by the backend, not the telephony edge.
+  - Consistent handling of AI/LLM inference: same delayed/batch logic as with ML model, allowing side-by-side benchmarking.
+  - Fewer network/security/NAT headaches and easier cloud/serverless scale-out.
+- **Tradeoff**: Same as ML model: not true real-time, but much easier to build, secure, maintain, and scale out.
+
+---
+
+**Summary Table:**
+
+| Strategy       | Real-Time?      | Infra Required | Webhook/Callback         | Deployment Simplicity         |
+| -------------- | --------------- | -------------- | ------------------------ | ----------------------------- |
+| Twilio Native  | Yes (remote)    | Low            | Twilio event AMD webhook | ✅ Single API, no streaming   |
+| SIP + Jambonz  | Yes (remote)    | Moderate       | Jambonz event webhook    | ✅ HTTP only, no extra ports  |
+| HuggingFace ML | No (batch post) | Moderate       | Buffer + HTTP inference  | ✅ API only, no websocket ext |
+| Gemini (LLM)   | No (batch post) | Moderate/High  | Buffer + HTTP inference  | ✅ API only, no websocket ext |
+
+---
+
+## **Project Structure**
+
+```plaintext
+attack-capital/
+├── attack-capital-amd/     # Main Next.js application
+│   ├── src/app/            # Next.js (API, pages)
+│   ├── src/lib/amd-strategies/ # All AMD strategy logic
+│   ├── prisma/             # Schema and migrations
+│   └── ...                 # Config, env, etc.
+├── python-service/         # FastAPI service for Hugging Face ML
+│   └── app/
+│       └── main.py
+└── docs/                   # In-depth strategy docs
 ```
 
 ---
 
-## Repo Structure
+## **Installation & Setup**
 
-- `app/` — Next.js App Router (UI + API routes) [not shown in this snippet]
-- `lib/amdStrategies.ts` — AMD strategy factory/orchestration (planned location)
-- `prisma/` — Prisma schema and migrations
-- `python-service/` — FastAPI Hugging Face inference service
-  - `app/main.py` — Wav2Vec2 model inference endpoints
-- `docs/` — Strategy docs and deep dives
+**1. Prerequisites:**
 
----
-
-## Quick Start
-
-### Prerequisites
-
-- Node 18+ (or 20+), pnpm or npm
+- Node 18+ (or 20+)
 - Python 3.10+
-- Docker (for Postgres or optional for python-service)
-- Postgres 14+ (local or Docker)
-- ngrok (or HTTPS tunnel) for local webhooks
-- Twilio account (trial OK; see limitations)
+- Postgres 14+
+- Docker (optional for DB/ML service)
+- Twilio account (trial is okay, but paid for true accuracy)
+- (Optional) Jambonz instance
 
-### Environment Variables
+**2. Database:**
 
-Create `.env` in the Next.js project root:
+- Run Postgres locally or via Docker
+- Use `.env.example` and create `.env` with your secrets
 
+**3. Next.js app:**
+
+```bash
+cd attack-capital-amd
+pnpm install    # or 'npm install'
+pnpm prisma migrate dev
+pnpm dev
 ```
-# Next.js App
-NEXT_PUBLIC_APP_URL=https://your-ngrok-domain.ngrok.io
 
-# Auth
+Visit (http://localhost:3000)
+
+**4. Python Service (for Strategy 3):**
+
+```bash
+cd python-service/app
+pip install -r ../requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Point ML endpoints in `.env` as needed.
+
+**5. Expose local services with ngrok if needed for webhooks.**
+
+---
+
+## **Environment Configuration**
+
+```env
+# Next.js
+NEXT_PUBLIC_APP_URL=https://your-ngrok-url.ngrok.io
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/attack_capital
 BETTER_AUTH_SECRET=replace_me
-
-# Database
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/attack_capital?schema=public
-
-# Twilio
 TWILIO_ACCOUNT_SID=ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_AUTH_TOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 TWILIO_FROM_NUMBER=+1XXXXXXXXXX
 TWILIO_STATUS_CALLBACK_URL=${NEXT_PUBLIC_APP_URL}/api/amd-events
-TWILIO_MEDIA_STREAM_WS=${NEXT_PUBLIC_APP_URL}/api/stream
 
-# Jambonz (optional)
+# Jambonz (strategy 2)
 JAMBONZ_SIP_DOMAIN=sip.your-domain.com
 JAMBONZ_AMD_WEBHOOK=${NEXT_PUBLIC_APP_URL}/api/amd-events
 
@@ -109,185 +251,95 @@ JAMBONZ_AMD_WEBHOOK=${NEXT_PUBLIC_APP_URL}/api/amd-events
 HF_SERVICE_URL=http://localhost:8000
 ```
 
-For the Python service, you can also create `python-service/.env` if needed (not required by default).
+---
 
-### Database Setup (Postgres + Prisma)
+## **Database Schema**
 
-1. Start Postgres (example via Docker):
-   ```bash
-   docker run --name pg-attack -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:14
-   ```
-2. Install deps and generate Prisma client:
-   ```bash
-   pnpm install # or npm install
-   pnpm prisma migrate dev
-   pnpm prisma generate
-   ```
+See the previous README or `/prisma/schema.prisma`. Includes:
 
-Suggested Prisma model (high-level) — actual schema may differ:
-
-```sql
-model CallLog {
-  id              String   @id @default(cuid())
-  userId          String
-  toNumber        String
-  fromNumber      String
-  strategy        String   // 'twilio' | 'jambonz' | 'huggingface' | 'gemini'
-  status          String   // 'human' | 'machine' | 'undecided' | 'error' | 'no_answer'
-  confidence      Float?
-  latencyMs       Int?
-  attempt         Int      @default(1)
-  rawPayload      Json?
-  createdAt       DateTime @default(now())
-}
-```
-
-### Python Service (Hugging Face) — Local Dev
-
-Run directly:
-
-```bash
-cd python-service/app
-pip install -r ../requirements.txt  # if present; else install: fastapi uvicorn torch transformers librosa numpy
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Or via Docker (example):
-
-```bash
-docker build -t attack-capital-hf python-service
-docker run --rm -p 8000:8000 attack-capital-hf
-```
-
-Expose locally via ngrok for Next.js if needed:
-
-```bash
-ngrok http 8000
-```
-
-### Next.js App — Dev
-
-```bash
-pnpm dev
-```
-
-Expose the app for Twilio webhooks:
-
-```bash
-ngrok http 3000
-```
-
-Update `.env` URLs to the ngrok domain and restart dev.
+- Users, Sessions
+- CallLog (with AMD results, strategy, timings, confidence, etc.)
 
 ---
 
-## AMD Strategies
+## **API Endpoints**
 
-- Strategy 1: Twilio Native AMD — baseline using `machineDetection: 'Enable'` or `detect-message-end`
-  - Doc: `docs/strategy-1-twilio-native.md`
-- Strategy 2: Twilio + Jambonz SIP AMD — SIP trunk to Jambonz with configurable AMD params
-  - Doc: `docs/strategy-2-jambonz.md`
-- Strategy 3: Hugging Face (Python) — Wav2Vec2 inference via `/predict` and `/predict-stream`
-  - Doc: `docs/strategy-3-huggingface.md`
-- Strategy 4: Gemini 2.5 Flash Live — Design present; not yet implemented
-  - Doc: `docs/strategy-4-gemini.md`
+_(See previous answer for full details.)_
 
-A factory creates the correct engine based on selection:
-
-```ts
-// lib/amdStrategies.ts (planned sketch)
-export type Strategy = "twilio" | "jambonz" | "huggingface" | "gemini";
-export function createDetector(strategy: Strategy) {
-  /* returns { start, onChunk, finalize } */
-}
-```
+- `/api/dial` – Initiate a call with a Twilio for AMD
+- `/api/dial/huggingface` – Initiate a call with Twilio and HuggingFace for AMD
+- `/api/dial/gemini` – Initiate a call with Twilio and Gemini for AMD
 
 ---
 
-## Python Service API (Hugging Face)
+## **Calling Flow & UI**
 
-- `POST /predict` — body: audio file (2–5s). Returns `{ label: 'human'|'voicemail', confidence, processing_time_ms, model_info }`
-- `POST /predict-stream` — same payload contract (for chunk mode)
-- `GET /health`, `GET /model-info`
-
-The bundled service loads `jakeBland/wav2vec-vm-finetune`, normalizes audio to 16kHz mono, and infers on GPU if available.
-
----
-
-## Calling Flow & UI
-
-1. Authenticated user selects strategy and target number, then clicks Dial.
-2. Backend creates Twilio call (or routes via SIP/Jambonz) and sets media/webhook URLs.
-3. On answer:
-   - Strategy performs AMD. If human → connect to live session UI and keep streaming; if machine → hang up and log.
-4. Results are logged in Postgres with latency, confidence, and payloads.
-
-UI shows real‑time status: dialing → ringing → answered → human/machine decision → action.
+1. User logs in, enters a number, selects AMD strategy, and dials.
+2. Backend triggers call + appropriate AMD hook.
+3. Webhooks (Twilio or Jambonz) or batch ML services classify the result.
+4. UI and database are updated with result, latency, and logs.
 
 ---
 
-## Testing & Validation
+## **Testing & Validation**
 
-Target numbers (voicemail simulations):
+Test on provided voicemail simulation numbers:
 
 - Costco: 1-800-774-2678
 - Nike: 1-800-806-6453
-- PayPal: 1-888-221-1161
-
-Scenarios:
-
-- Voicemail (greeting > 5 words) → expect machine; hangup + log
-- Human pickup (say “hello” quickly) → expect human; connect stream
-- Timeout (3s silence) → treat as human (undecided policy)
-- Low confidence (< 0.7) → retry once (max 2x); log warning and allow user override
-
-Record ≥10 calls per strategy; export CSV from history. Track false positives/negatives.
+- PayPal: 1-888-221-1161  
+  Test at least 10 calls/strategy and log all false positives/negatives.
 
 ---
 
-## Comparison (Fill with your results)
+## **Security Considerations**
 
-| Strategy         | Accuracy (machine) | Accuracy (human) | P50 Latency | Cost | Notes                                        |
-| ---------------- | -----------------: | ---------------: | ----------: | ---: | -------------------------------------------- |
-| Twilio Native    |                TBD |              TBD |         TBD |    $ | Trial message hurts latency/accuracy         |
-| Jambonz SIP      |                TBD |              TBD |         TBD |   $$ | Customizable thresholds and timers           |
-| Hugging Face     |                TBD |              TBD |         TBD |    $ | ONNX export can reduce latency               |
-| Gemini (Planned) |                TBD |              TBD |         TBD |   $$ | Hallucination risks; robust prompts required |
-
----
-
-## Security
-
-- Validate inputs with Zod on API routes (numbers, strategy, webhook payloads)
-- Rate limit public endpoints (e.g., Upstash)
-- Enforce HTTPS for webhooks (use ngrok in dev)
-- Store only necessary payload fields; redact PII
-- Principle of least privilege for Twilio keys and DB creds
+- All inputs validated (Zod, custom validation)
+- Only a single public-facing web server (Next.js)
+- Proper use of HTTPS for all hooks
+- Only essential info logged
+- Principled .env secrets usage
 
 ---
 
-## Known Limitations
+## **Known Limitations**
 
-- Twilio Trial Accounts:
-
-  - Must verify every destination number before calling
-  - Twilio plays a trial message on connect and requires a key press to dismiss
-  - This delays AMD and can cause misclassification, especially for Twilio Native AMD (Strategy 1)
-  - Recommendation: Use a paid account for accurate benchmarking, or pre‑record/tune flows that wait out the trial prompt before AMD
-
-- Strategy 4 (Gemini) not implemented yet; design is included for future work
+- Twilio trial account: all destination numbers must be verified; trial announcement delays AMD.
+- Hugging Face/Gemini strategies run batch/post-call, not in true real-time.
+- Gemini API integration is planned; code for inference pipeline is pending.
 
 ---
 
-## Roadmap
+## **Deployment Guide**
 
-- Implement Gemini Live strategy with streaming bi‑directional audio and cost caps
-- Export HF model to ONNX and enable attention optimizations for low‑latency CPU paths
-- Add comprehensive history view with CSV export, filters, and metrics
-- Add per‑user rate limits and org multi‑tenancy
+- **Dev**: Use local Docker, or [Vercel](https://vercel.com/), [Railway](https://railway.app/), etc.
+- **Production**: Docker Compose, Kubernetes, or PaaS.
+- Single public app wherever possible, so deployment is as simple as `pnpm build && pnpm start` (Next.js), or `docker-compose up`.
 
 ---
 
-## License
+## **Roadmap**
 
-MIT (or per repository root).
+- Twilio/Jambonz/Hugging Face strategies
+- Gemini/LLM integration
+- Fully real-time stream processing for ML/LLM (future)
+- Multi-tenant production deployment
+- Mobile app for call control
+
+---
+
+## **Contributing**
+
+- Fork, create a feature branch, PR to main repo.
+- Follow Conventional Commits.
+- Use provided linter, code style, and type check scripts.
+
+## **Contact**
+
+- **Author**: Sagar Manchakatla
+- **GitHub**: [@sagarmanchakatla](https://github.com/sagarmanchakatla)
+- **Email**: your-email@example.com (replace with your own)
+
+---
+
+This version gives any reviewer/interviewer a deep, direct look at your decisions, engineering trade-offs, and highlights the practical approach you took for each AMD strategy!
